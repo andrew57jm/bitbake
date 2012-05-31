@@ -222,6 +222,35 @@ class TerminalFilter(object):
             fd = sys.stdin.fileno()
             self.termios.tcsetattr(fd, self.termios.TCSADRAIN, self.stdinbackup)
 
+class StdinMgr:
+    def __init__(self):
+        import termios
+        self.termios = termios
+        self.stdinbackup = None
+        self.fd = None
+        if sys.stdin.isatty():
+            self.fd = sys.stdin.fileno()
+            self.stdinbackup = self.termios.tcgetattr(self.fd)
+            new = self.termios.tcgetattr(self.fd)
+            new[3] = new[3] & ~self.termios.ICANON & ~self.termios.ECHO
+            self.termios.tcsetattr(self.fd, self.termios.TCSANOW, new)
+
+    def poll(self):
+        if not self.stdinbackup:
+            return False
+        return select.select([sys.stdin], [], [], 0) == ([sys.stdin], [], [])
+
+    def restore(self):
+        if self.stdinbackup:
+            self.termios.tcsetattr(self.fd, self.termios.TCSADRAIN,
+                                   self.stdinbackup)
+            self.stdinbackup = None
+        # Force echo back on "just in case" something went haywire with an exception
+        if sys.stdin.isatty():
+            new = self.termios.tcgetattr(self.fd)
+            new[3] = new[3] | self.termios.ECHO
+            self.termios.tcsetattr(self.fd, self.termios.TCSANOW, new)
+
 class RtLogLevel:
     def __init__(self, mlt):
         self.displaytail = False
@@ -346,6 +375,7 @@ def main(server, eventHandler, params, tf = TerminalFilter):
 
     termfilter = tf(main, helper, console, errconsole, format)
     atexit.register(termfilter.finish)
+    stdin_mgr = StdinMgr()
 
     while True:
         try:
@@ -355,6 +385,9 @@ def main(server, eventHandler, params, tf = TerminalFilter):
                     break
                 termfilter.updateFooter()
                 event = eventHandler.waitEvent(0.25)
+                if stdin_mgr.poll():
+                    keyinput = sys.stdin.read(1)
+                    rtloglevel.setLevel(keyinput, True)
                 # Always try printing any accumulated log files first
                 rtloglevel.displayLogs()
                 if event is None:
@@ -559,6 +592,7 @@ def main(server, eventHandler, params, tf = TerminalFilter):
                 _, error = server.runCommand(["stateForceShutdown"])
             main.shutdown = 2
         except KeyboardInterrupt:
+            stdin_mgr.restore()
             termfilter.clearFooter()
             if params.observe_only:
                 print("\nKeyboard Interrupt, exiting observer...")
@@ -581,6 +615,7 @@ def main(server, eventHandler, params, tf = TerminalFilter):
             if not params.observe_only:
                 _, error = server.runCommand(["stateForceShutdown"])
             main.shutdown = 2
+    stdin_mgr.restore()
     summary = ""
     if taskfailures:
         summary += pluralise("\nSummary: %s task failed:",
