@@ -119,6 +119,13 @@ class BBLogFilter(object):
         handler.setLevel(loglevel)
         handler.addFilter(self)
 
+    def setFiltLevel(self, handler, level):
+        self.stdlevel = level
+        handler.setLevel(level)
+
+    def getFiltLevel(self):
+        return self.stdlevel
+
     def filter(self, record):
         if record.levelno >= self.stdlevel:
             return True
@@ -182,6 +189,7 @@ def addDefaultlogFilter(handler, cls = BBLogFilter):
     level, debug_domains = constructLogOptions()
 
     cls(handler, level, debug_domains)
+    return BBLogFilter(handler, level, debug_domains)
 
 #
 # Message handling functions
