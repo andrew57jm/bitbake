@@ -100,7 +100,7 @@ class InteractConsoleLogFilter(logging.Filter):
         self.format = format
 
     def filter(self, record):
-        if record.levelno == self.format.NOTE and (record.msg.startswith("Running") or record.msg.startswith("recipe ")):
+        if self.tf.filterOn and record.levelno == self.format.NOTE and (record.msg.startswith("Running") or record.msg.startswith("recipe ")):
             return False
         self.tf.clearFooter()
         return True
@@ -139,6 +139,8 @@ class TerminalFilter(object):
         self.main = main
         self.helper = helper
         self.cuu = None
+        self.topMode = False
+        self.filterOn = False
         self.stdinbackup = None
         self.interactive = sys.stdout.isatty()
         self.footer_present = False
@@ -175,10 +177,32 @@ class TerminalFilter(object):
             self.columns = self.getTerminalColumns()
         except:
             self.cuu = None
+        self.topMode = True
+        self.filterOn = True
         console.addFilter(InteractConsoleLogFilter(self, format))
         errconsole.addFilter(InteractConsoleLogFilter(self, format))
 
+    def setTopMode(self):
+        if self.topMode:
+            return
+        self.topMode = True
+        self.setFilterOn()
+
+    def setNormalMode(self):
+        if not self.topMode:
+            return
+        self.topMode = False
+        self.setFilterOff()
+
+    def setFilterOn(self):
+        self.filterOn = True
+
+    def setFilterOff(self):
+        self.filterOn = False
+
     def clearFooter(self):
+        if not self.topMode:
+            return
         if self.footer_present:
             lines = self.footer_present
             sys.stdout.write(self.curses.tparm(self.cuu, lines))
@@ -190,7 +214,7 @@ class TerminalFilter(object):
         self.updateFooter()
 
     def updateFooter(self):
-        if not self.cuu:
+        if not self.cuu or not self.topMode:
             return
         activetasks = self.helper.running_tasks
         failedtasks = self.helper.failed_tasks
@@ -256,23 +280,29 @@ class StdinMgr:
             self.termios.tcsetattr(self.fd, self.termios.TCSANOW, new)
 
 class RtLogLevel:
-    def __init__(self, handler, logfilter, mlt):
+    def __init__(self, handler, logfilter, mlt, tf):
         self.displaytail = False
         self.handler = handler
         self.logfilter = logfilter
         self.defaultLevel = logfilter.getFiltLevel()
         self.mlt = mlt
+        self.tf = tf
 
     def displayLogs(self):
         if self.displaytail:
             self.mlt.displayLogs()
 
     def setLevel(self, input, verbose):
-        if input == "1":
+        if input == "1" or input == "0":
             if verbose:
                 print "NOTE: Turning off real time log tail"
             self.logfilter.setFiltLevel(self.handler, self.defaultLevel)
             self.displaytail = False
+            if isinstance(self.tf, TerminalFilter):
+                if input == "0":
+                    self.tf.setNormalMode()
+                else:
+                    self.tf.setTopMode()
         elif input == "2":
             if verbose:
                 print "NOTE: Turning on real time log tail"
@@ -288,6 +318,29 @@ class RtLogLevel:
                 print "NOTE: Turning on DEBUG logging + real time log tail"
             self.logfilter.setFiltLevel(self.handler, logging.DEBUG)
             self.displaytail = True
+        elif input == "t":
+            if verbose:
+                print "NOTE: Activing task \"top\" mode"
+            if isinstance(self.tf, TerminalFilter):
+                self.tf.setTopMode()
+        elif input == "N":
+            if verbose:
+                print "NOTE: Turning on task notes"
+            if isinstance(self.tf, TerminalFilter):
+                self.tf.setFilterOff()
+        elif input == "h" or input == "?":
+            print "============================================="
+            print "Interaction help commands:"
+            print " 0 - Linear logging"
+            print " 1 - turn off real time log tail"
+            print " 2 - turn on real time log tail"
+            print " 3 - turn on debug logging"
+            print " 4 - turn on debug logging and real time log tail"
+            print " t - Display tasks in \"top\" mode"
+            print " N - Display all runtime NOTE's that are normally filtered (0 or 1 toggles off)"
+            print " h - display commands"
+            return False
+        return True
 
 def _log_settings_from_server(server):
     # Get values of variables which control our output
@@ -303,7 +356,11 @@ def _log_settings_from_server(server):
     if error:
         logger.error("Unable to get the value of BB_CONSOLELOG variable: %s" % error)
         raise BaseException(error)
-    return includelogs, loglines, consolelogfile
+    bb_rt_loglevel, error = server.runCommand(["getVariable", "BB_RT_LOGLEVEL"])
+    if error:
+        logger.error("Unable to get the value of BB_RT_LOGLEVEL variable: %s" % error)
+        raise BaseException(error)
+    return includelogs, loglines, consolelogfile, bb_rt_loglevel
 
 _evt_list = [ "bb.runqueue.runQueueExitWait", "bb.event.LogExecTTY", "logging.LogRecord",
               "bb.build.TaskFailed", "bb.build.TaskBase", "bb.event.ParseStarted",
@@ -316,7 +373,7 @@ _evt_list = [ "bb.runqueue.runQueueExitWait", "bb.event.LogExecTTY", "logging.Lo
 
 def main(server, eventHandler, params, tf = TerminalFilter):
 
-    includelogs, loglines, consolelogfile = _log_settings_from_server(server)
+    includelogs, loglines, consolelogfile, bb_rt_loglevel = _log_settings_from_server(server)
 
     if sys.stdin.isatty() and sys.stdout.isatty():
         log_exec_tty = True
@@ -339,10 +396,6 @@ def main(server, eventHandler, params, tf = TerminalFilter):
     bb.msg.addDefaultlogFilter(console, bb.msg.BBLogFilterStdOut)
     bb.msg.addDefaultlogFilter(errconsole, bb.msg.BBLogFilterStdErr)
     logfilter = bb.msg.addDefaultlogFilter(console)
-    rtloglevel = RtLogLevel(console, logfilter, mlt)
-    bb_rt_loglevel = server.runCommand(["getVariable", "BB_RT_LOGLEVEL"])
-    if bb_rt_loglevel and bb_rt_loglevel != "":
-        rtloglevel.setLevel(bb_rt_loglevel, False)
     console.setFormatter(format)
     errconsole.setFormatter(format)
     logger.addHandler(console)
@@ -396,6 +449,10 @@ def main(server, eventHandler, params, tf = TerminalFilter):
     atexit.register(termfilter.finish)
     stdin_mgr = StdinMgr()
 
+    rtloglevel = RtLogLevel(console, logfilter, mlt, termfilter)
+    if bb_rt_loglevel and bb_rt_loglevel != "":
+        for inputkey in bb_rt_loglevel:
+            rtloglevel.setLevel(inputkey, False)
     while True:
         try:
             event = eventHandler.waitEvent(0)
@@ -406,12 +463,15 @@ def main(server, eventHandler, params, tf = TerminalFilter):
                 event = eventHandler.waitEvent(0.25)
                 if stdin_mgr.poll():
                     keyinput = sys.stdin.read(1)
-                    rtloglevel.setLevel(keyinput, True)
-                    termfilter.updateFooterForce()
+                    termfilter.clearFooter()
+                    if (rtloglevel.setLevel(keyinput, True)):
+                        termfilter.updateFooterForce()
+
                 # Always try printing any accumulated log files first
                 rtloglevel.displayLogs()
                 if event is None:
                     continue
+
             helper.eventHandler(event)
             if isinstance(event, bb.build.TaskStarted):
                 mlt.openLog(event.logfile, event.pid)
