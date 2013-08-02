@@ -24,6 +24,7 @@
 
 import os
 import sys, logging
+import signal
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)),
                                 'lib'))
 
@@ -57,6 +58,13 @@ try:
 except:
     pass
 
+# start pdb tracing if we receive SIGUSR1.
+def handle_pdb(sig, frame):
+    try:
+        import pdb
+        pdb.Pdb().set_trace(frame)
+    except ImportError:
+        logger.debug(2, 'Unable to import pdb module, interactive debugging of bitbake will not be possible')
 
 def get_ui(config):
     if not config.ui:
@@ -379,6 +387,7 @@ def main():
 
 if __name__ == "__main__":
     try:
+        signal.signal(signal.SIGUSR1, handle_pdb)
         ret = main()
     except bb.BBHandledException:
         ret = 1
