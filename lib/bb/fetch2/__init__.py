@@ -1460,7 +1460,7 @@ class Fetch(object):
 
                 if not localpath or ((not os.path.exists(localpath)) and localpath.find("*") == -1):
                     if firsterr:
-                        logger.error(str(firsterr))
+                        logger.warn(str(firsterr))
                     raise FetchError("Unable to fetch URL from any source.", u)
 
                 update_stamp(ud, self.d)
