@@ -1094,10 +1094,9 @@ class RunQueue:
             return self._execute_runqueue()
         except bb.runqueue.TaskFailure:
             raise
-        except SystemExit:
-            raise
-        except:
-            logger.error("An uncaught exception occured in runqueue, please see the failure below:")
+        except BaseException as e:
+            if not isinstance(e, (SystemExit, bb.BBHandledException)):
+                logger.error("An uncaught exception occured in runqueue, please see the failure below:")
             try:
                 self.teardown_workers()
             except:
@@ -1822,7 +1821,11 @@ class RunQueueExecuteScenequeue(RunQueueExecute):
                 sq_task.append(task)
             call = self.rq.hashvalidate + "(sq_fn, sq_task, sq_hash, sq_hashfn, d)"
             locs = { "sq_fn" : sq_fn, "sq_task" : sq_taskname, "sq_hash" : sq_hash, "sq_hashfn" : sq_hashfn, "d" : self.cooker.data }
-            valid = bb.utils.better_eval(call, locs)
+            try:
+                valid = bb.utils.better_eval(call, locs)
+            except Exception as e:
+                logger.error("Hash validation failed in RunQueueExecuteScenequeue %s" % str(e))
+                raise bb.BBHandledException()
 
             valid_new = stamppresent
             for v in valid:
@@ -2007,7 +2010,6 @@ class TaskFailure(Exception):
     """
     def __init__(self, x):
         self.args = x
-
 
 class runQueueExitWait(bb.event.Event):
     """
