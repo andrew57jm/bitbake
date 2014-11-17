@@ -388,6 +388,8 @@ def main():
 if __name__ == "__main__":
     try:
         signal.signal(signal.SIGUSR1, handle_pdb)
+        # Don't hang up and wait to exit when SIGHUP
+        signal.signal(signal.SIGHUP, signal.SIG_IGN)
         ret = main()
     except bb.BBHandledException:
         ret = 1
