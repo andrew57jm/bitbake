@@ -108,12 +108,26 @@ class RunQueueScheduler(object):
 
         self.buildable = []
         self.stamps = {}
+        self.rev_stamps = {}
         for taskid in xrange(self.numTasks):
             fn = self.rqdata.taskData.fn_index[self.rqdata.runq_fnid[taskid]]
             taskname = self.rqdata.runq_task[taskid]
             self.stamps[taskid] = bb.build.stampfile(taskname, self.rqdata.dataCache, fn)
+            stampbase = self.stamps[taskid].replace(rqdata.get_task_hash(taskid),'')
+            if stampbase not in self.rev_stamps:
+                self.rev_stamps[stampbase] = []
+            self.rev_stamps[stampbase].append(taskid)
             if self.rq.runq_buildable[taskid] == 1:
                 self.buildable.append(taskid)
+        for stamp in self.rev_stamps:
+            if len(self.rev_stamps) > 1:
+                h = None
+                for task in self.rev_stamps[stamp]:
+                    newh = rqdata.get_task_hash(task)
+                    if not h:
+                        h = newh
+                    if h != newh:
+                        bb.fatal("Mismatch %s (%s) compared to %s (%s)" % (rqdata.get_user_idstring(task), h, rqdata.get_user_idstring(self.rev_stamps[stamp][0]), newh))
 
         self.rev_prio_map = None
 
